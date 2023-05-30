@@ -1,105 +1,117 @@
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
+from django.shortcuts import render
+from rest_framework.decorators import api_view
 from rest_framework.response import Response
-from rest_framework.status import HTTP_200_OK
-from main.models import Product, Cart, Order
-from .permissions import IsClient
-from .serializers import ProductSerializer, CartSerializer, OrderSerializer
+
+from main.models import Order, Cart, Product
+from main.serializers import OrderSerializer, CartSerializer, ProductSerializer
 
 
 # Create your views here.
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def ProductsViewDef(request):
-    queryset = Product.objects.all()
-    serializer = ProductSerializer(queryset, many=True)
-    return Response({'data': serializer.data}, status=200)
+@api_view(["GET"])
+def list_product(request):
+    products = Product.objects.all()
+    return Response({"data": ProductSerializer(products, many=True).data})
 
 
-@api_view(['POST'])
-@permission_classes([IsAdminUser])
-def ProductAddView(request):
+@api_view(["POST"])
+def post_product(request):
+    if not request.user.is_active:
+        return Response({"error": {"code": 403, "message": "Login failed"}})
+    if not request.user.is_staff:
+        return Response({"error": {"code": 403, "message": "Forbidden for you"}})
     serializer = ProductSerializer(data=request.data)
     if serializer.is_valid():
         serializer.save()
-        data = serializer.data
-        return Response({'data': {"id": data["id"], "message": "Product added succesffuly"}}, status=201)
-    return Response({"error":
-                         {"code": 422,
-                          "message": "Validation error",
-                          "errors": serializer.errors}})
+        return Response({'data': {"id": serializer.data["id"], "message": "Product added"}})
+    return Response({"error": {"code": 422, "message": 'Validation error', "errors": serializer.errors}})
 
 
-@api_view(["GET", "PATCH", "DELETE"])
-@permission_classes([IsAdminUser])
-def ProductChangeDeleteDef(request, pk):
+@api_view(["PATCH", "DELETE"])
+def detail_product(request, **kwargs):
+    if not request.user.is_active:
+        return Response({"error": {"code": 403, "message": "Login failed"}})
+    if not request.user.is_staff:
+        return Response({"error": {"code": 403, "message": "Forbidden for you"}})
     try:
-        product = Product.objects.get(pk=pk)
+        product = Product.objects.get(pk=kwargs["pk"])
     except:
-        return Response({"error": {"code": 404, "message": "Not Found"}}, status=404)
-    if request.method == "GET":
-        serializer = ProductSerializer(product)
-        return Response({"data": serializer.data}, status=200)
-    elif request.method == "PATCH":
-        serializer = ProductSerializer(product, data=request.data, partial=True)
+        return Response({"error": {"code": 404, "message": "Not found"}})
+    if request.method == "DELETE":
+        product.delete()
+        return Response({"data": {"message": "Product removed"}})
+    if request.method == "PATCH":
+        serializer = ProductSerializer(data=request.data, instance=product, partial=True)
         if serializer.is_valid():
             serializer.save()
-            return Response({"data": serializer.data}, status=200)
-        return Response({"error":
-                             {"code": 422,
-                              "message": "Validation error",
-                              "errors": serializer.errors}})
-    elif request.method == "DELETE":
-        product.delete()
-        return Response({"data": {"message": "product deleted"}}, status=200)
+            return Response({"data": serializer.data})
+        return Response({"error": {"code": 422, "message": 'Validation error', "errors": serializer.errors}})
 
 
 @api_view(["GET"])
-@permission_classes([IsClient])
-def CartView(request):
-    cart = Cart.objects.filter(user=request.user)
-    serializer = CartSerializer(cart, many=True)
-    data = serializer.data
-    return Response(data, status=200)
+def get_cart(request):
+    if not request.user.is_active:
+        return Response({"error": {"code": 403, "message": "Login failed"}})
+    if request.user.is_staff:
+        return Response({"error": {"code": 403, "message": "Forbidden for you"}})
+    cart, c = Cart.objects.get_or_create(user=request.user)
+    serializer = CartSerializer(cart)
+    count = 0
+    data = []
+    for item in serializer.data["products"]:
+        count += 1
+        data.append({
+            "id": count,
+            "product_id": item["id"],
+            "name": item["name"],
+            "description": item["description"],
+            "price": item["price"]
+        })
+    return Response({"data": data})
 
 
 @api_view(["POST", "DELETE"])
-@permission_classes([IsClient])
-def AddCartView(request, pk):
+def detail_cart(request, **kwargs):
+    if not request.user.is_active:
+        return Response({"error": {"code": 403, "message": "Login failed"}})
+    if request.user.is_staff:
+        return Response({"error": {"code": 403, "message": "Forbidden for you"}})
     try:
-        product = Product.objects.get(pk=pk)
-    except Product.DoesNotExist:
-        return Response({"error": {"code": 404, "message": "Не найдено"}}, status=404)
+        product = Product.objects.get(pk=kwargs["pk"])
+    except:
+        return Response({"error": {"code": 404, "message": "Not found"}})
+    cart, c = Cart.objects.get_or_create(user=request.user)
     if request.method == "POST":
-        cart, c = Cart.objects.get_or_create(user=request.user)
         cart.products.add(product)
-        serializer = CartSerializer(cart)
-        return Response({"body": {"message": "Product add to cart"}}, status=200)
-    elif request.method == "DELETE":
-        cart = Cart.objects.get(user=request.user)
+        cart.save()
+        return Response({"data": {"message": "Product add to card"}})
+    if request.method == 'DELETE':
         cart.products.remove(product)
-        return Response({"data": {"message": "Item removed from cart"}}, status=200)
+        return Response({"data": {"message": "Item removed from cart"}})
 
 
 @api_view(["GET", "POST"])
-@permission_classes([IsAuthenticated])
-def GetCreateOrderView(request):
+def list_order(request):
+    if not request.user.is_active:
+        return Response({"error": {"code": 403, "message": "Login failed"}})
+    if request.user.is_staff:
+        return Response({"error": {"code": 403, "message": "Forbidden for you"}})
     if request.method == "GET":
-        orders = Order.objects.filter(user=request.user)
-        serializer = OrderSerializer(orders, many=True)
-        return Response(serializer.data)
-    elif request.method == "POST":
+        order = Order.objects.filter(user=request.user)
+        return Response({"data": OrderSerializer(order, many=True).data})
+    if request.method == 'POST':
         try:
             cart = Cart.objects.get(user=request.user)
-        except Cart.DoesNotExist:
-            return Response({"error": {"code": 422, "message": "Cart is empty"}}, status=422)
-        order, _ = Order.objects.get_or_create(user=request.user)
-        total = 0
+        except:
+            return Response({"error": {"code": 404, "message": "Cart is empty"}})
+        order = Order()
+        order.user = request.user
+        price = 0
         for product in cart.products.all():
-            total += product.price
+            price += product.price
+        order.order_price = price
+        order.save()
+        for product in cart.products.all():
             order.products.add(product)
-        order.order_price = total
         order.save()
         cart.delete()
-        serializer = OrderSerializer(order)
-        return Response(serializer.data, status=HTTP_200_OK)
+        return Response({'data': {"order_id": order.id, "message": "Order is processed"}})
